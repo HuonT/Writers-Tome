@@ -1,0 +1,130 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified;
+    }
+
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return request.auth.token.email in ['huon_t@hotmail.com', 'edward.tome.writer@gmail.com'];
+    }
+
+    function isPostOwner(postId) {
+      return isOwner(get(/databases/$(database)/documents/posts/$(postId)).data.userId);
+    }
+
+    match /users/{userId} {
+      allow read: if true;  // Allow public read access for member count
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && 
+                   (isOwner(userId) || 
+                    request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['emailPreferences', 'lastActive', 'isActive', 'earnedBadges']));
+      allow delete: if isAuthenticated() && isOwner(userId);
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated() && 
+                 (isOwner(resource.data.userId) || 
+                  request.auth.uid == resource.data.userId);
+      allow create: if isAuthenticated() && 
+                   isEmailVerified() && 
+                   isOwner(request.resource.data.userId);
+      allow update, delete: if isAuthenticated() && 
+                          isEmailVerified() && 
+                          isOwner(resource.data.userId);
+    }
+
+    match /posts/{postId} {
+      allow create: if isAuthenticated() && isEmailVerified();
+      allow read: if isAuthenticated();
+      allow update: if isAuthenticated() &&
+                   (isOwner(resource.data.userId) ||
+                    request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['likes', 'commentCount', 'content', 'title', 'category', 'requestingFeedback', 'updatedAt']));
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+
+      match /comments/{commentId} {
+        allow create: if isAuthenticated() && isEmailVerified();
+        allow read: if isAuthenticated();
+        allow update: if isAuthenticated() &&
+                     (isOwner(resource.data.userId) ||
+                      request.resource.data.diff(resource.data).affectedKeys()
+                      .hasOnly(['likes', 'content', 'updatedAt']));
+        allow delete: if isAuthenticated() && 
+                     (isOwner(resource.data.userId) || 
+                      isPostOwner(postId));
+
+        match /likes/{userId} {
+          allow read: if isAuthenticated();
+          allow write: if isAuthenticated() && isOwner(userId);
+          allow delete: if isAuthenticated() && 
+                       (isOwner(userId) || 
+                        isPostOwner(postId));
+        }
+      }
+
+      match /likes/{userId} {
+        allow read: if isAuthenticated();
+        allow write: if isAuthenticated() && isOwner(userId);
+        allow delete: if isAuthenticated() && 
+                     (isOwner(userId) || 
+                      isPostOwner(postId));
+      }
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && 
+                 (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isEmailVerified();
+      allow update: if isAuthenticated() && 
+                   (isOwner(resource.data.userId) || 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']));
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /feedbackRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isEmailVerified();
+      allow update: if isAuthenticated() && 
+                   (isOwner(resource.data.userId) || 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']));
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /contactMessages/{messageId} {
+      allow create: if isAuthenticated() && 
+                   isEmailVerified() && 
+                   isOwner(request.resource.data.userId);
+      allow read: if isAuthenticated() && 
+                 (isOwner(resource.data.userId) || isAdmin());
+      allow update: if isAuthenticated() && 
+                   (isAdmin() || 
+                    (isOwner(resource.data.userId) && 
+                     request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['status', 'replies', 'lastRepliedAt'])));
+      allow list: if isAuthenticated() && 
+                 ((request.query.limit <= 50) &&
+                  (request.query.orderBy == 'createdAt') &&
+                  (request.query.filters[0].fieldPath == 'userId' && 
+                   request.query.filters[0].op == '==' && 
+                   request.query.filters[0].value == request.auth.uid)) || 
+                 isAdmin();
+    }
+
+    match /archivedComments/{commentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(request.resource.data.postAuthorId);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+  }
+}
